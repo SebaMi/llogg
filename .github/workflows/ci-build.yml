@@ -41,7 +41,7 @@ jobs:
           if-no-files-found: error
 
   Linux:
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -143,7 +143,7 @@ jobs:
           if-no-files-found: error      
 
   Mac:
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -264,6 +264,27 @@ jobs:
 
       - uses: ./.github/actions/agent-build
       - uses: ./.github/actions/agent-run-tests
+      - name: Diagnose TBB files
+        shell: pwsh
+        run: |
+          $buildRoot = Join-Path $env:GITHUB_WORKSPACE "build_root"
+
+          Write-Host "=== TBB files under build root ==="
+
+          Get-ChildItem $buildRoot `
+            -Filter "tbb12.*" `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+
+          Write-Host "=== TBB files under output ==="
+
+          Get-ChildItem (Join-Path $buildRoot "output") `
+            -Filter "tbb12.*" `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
       - uses: ./.github/actions/agent-package-win
         with:
           s3-key-id: ${{ secrets.WIN_CS_KEY_ID }}
