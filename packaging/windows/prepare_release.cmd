@@ -12,15 +12,11 @@ xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\output\klogg.pdb %KLOGG_WORKSPACE%\re
 xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\output\klogg_crashpad_handler.exe %KLOGG_WORKSPACE%\release\ /y
 xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\output\klogg_minidump_dump.exe %KLOGG_WORKSPACE%\release\ /y
 
-xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\msvc_19.41_cxx17_64_md_relwithdebinfo\tbb12.dll %KLOGG_WORKSPACE%\release\ /y
-xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\msvc_19.41_cxx17_64_md_relwithdebinfo\tbb12.pdb %KLOGG_WORKSPACE%\release\ /y
-xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\msvc_19.41_cxx17_32_md_relwithdebinfo\tbb12.dll %KLOGG_WORKSPACE%\release\ /y
-xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\msvc_19.41_cxx17_32_md_relwithdebinfo\tbb12.pdb %KLOGG_WORKSPACE%\release\ /y
-
-xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\msvc_19.42_cxx17_64_md_relwithdebinfo\tbb12.dll %KLOGG_WORKSPACE%\release\ /y
-xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\msvc_19.42_cxx17_64_md_relwithdebinfo\tbb12.pdb %KLOGG_WORKSPACE%\release\ /y
-xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\msvc_19.42_cxx17_32_md_relwithdebinfo\tbb12.dll %KLOGG_WORKSPACE%\release\ /y
-xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\msvc_19.42_cxx17_32_md_relwithdebinfo\tbb12.pdb %KLOGG_WORKSPACE%\release\ /y
+echo "Copying tbb..."
+xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\output\tbb12.dll %KLOGG_WORKSPACE%\release\ /y
+for /d %%D in ("%KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\msvc_*_64_md_relwithdebinfo") do (
+    if exist "%%D\tbb12.pdb" xcopy "%%D\tbb12.pdb" %KLOGG_WORKSPACE%\release\ /y
+)
 
 xcopy %KLOGG_WORKSPACE%\%KLOGG_BUILD_ROOT%\generated\documentation.html %KLOGG_WORKSPACE%\release\ /y
 xcopy %KLOGG_WORKSPACE%\COPYING %KLOGG_WORKSPACE%\release\ /y

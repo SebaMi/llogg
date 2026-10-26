@@ -140,11 +140,11 @@ Section "MSVC Runtime libraries" vcruntime
 !if ${PLATFORM} == "x64"
     File release\vcruntime140_1.dll
 
-    File release\libcrypto-1_1-x64.dll
-    File release\libssl-1_1-x64.dll
+    File release\libcrypto-3-x64.dll
+    File release\libssl-3-x64.dll
 !else
-    File release\libcrypto-1_1.dll
-    File release\libssl-1_1.dll
+    File release\libcrypto-3.dll
+    File release\libssl-3.dll
 !endif
 
 SectionEnd
@@ -210,10 +210,10 @@ Section "Uninstall"
     Delete "$INSTDIR\tbbmalloc_proxy.dll"
     Delete "$INSTDIR\klogg_tbbmalloc.dll"
     Delete "$INSTDIR\klogg_tbbmalloc_proxy.dll"
-    Delete "$INSTDIR\libcrypto-1_1-x64.dll"
-    Delete "$INSTDIR\libssl-1_1-x64.dll"
-    Delete "$INSTDIR\libcrypto-1_1.dll"
-    Delete "$INSTDIR\libssl-1_1.dll"
+    Delete "$INSTDIR\libcrypto-3-x64.dll"
+    Delete "$INSTDIR\libssl-3-x64.dll"
+    Delete "$INSTDIR\libcrypto-3.dll"
+    Delete "$INSTDIR\libssl-3.dll"
     Delete "$INSTDIR\mimalloc.dll"
     Delete "$INSTDIR\mimalloc_override.dll"
     Delete "$INSTDIR\mimalloc_redirect.dll"
