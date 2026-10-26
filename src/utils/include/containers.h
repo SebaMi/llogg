@@ -20,15 +20,22 @@
 #ifndef KLOGG_CONTAINERS_H
 #define KLOGG_CONTAINERS_H
 
+#ifdef KLOGG_USE_MIMALLOC
 #include <mimalloc.h>
+#endif
 #include <vector>
 
 #include <type_safe/narrow_cast.hpp>
 #include <type_traits>
 
 namespace klogg {
+#ifdef KLOGG_USE_MIMALLOC
 template <typename T>
 using vector = std::vector<T, mi_stl_allocator<T>>;
+#else
+template <typename T>
+using vector = std::vector<T>;
+#endif
 
 template <class C>
 constexpr auto ssize( const C& c )

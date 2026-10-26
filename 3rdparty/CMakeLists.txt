@@ -308,6 +308,15 @@ if(WIN32)
   set(BUILD_SHARED_LIBS OFF)
 endif()
 
+# mimalloc is not compatible with ThreadSanitizer (custom allocator + TSan interceptor clash).
+# When building with TSan, use an empty interface wrapper and plain libc malloc via klogg::vector.
+set(KLOGG_USE_MIMALLOC ON)
+if(ENABLE_SANITIZER_THREAD)
+  set(KLOGG_USE_MIMALLOC OFF)
+  message(STATUS "Disabling mimalloc for ThreadSanitizer build")
+endif()
+
+if(KLOGG_USE_MIMALLOC)
 set(CPM_USE_LOCAL_PACKAGES OFF)
 cpmaddpackage(
   NAME
@@ -331,10 +340,16 @@ if(mimalloc_ADDED)
   add_library(klogg_mimalloc_wrapper INTERFACE)
   target_link_libraries(klogg_mimalloc_wrapper INTERFACE mimalloc-static)
   target_include_directories(klogg_mimalloc_wrapper INTERFACE ${mimalloc_SOURCE_DIR}/include)
+  target_compile_definitions(klogg_mimalloc_wrapper INTERFACE KLOGG_USE_MIMALLOC=1)
 else()
   add_library(klogg_mimalloc_wrapper INTERFACE)
   target_link_libraries(klogg_mimalloc_wrapper INTERFACE ${MIMALLOC_LIBRARY})
   target_include_directories(klogg_mimalloc_wrapper INTERFACE ${MIMALLOC_INCLUDE_DIR})
+  target_compile_definitions(klogg_mimalloc_wrapper INTERFACE KLOGG_USE_MIMALLOC=1)
+endif()
+ else()
+  message("klogg_mimalloc_wrapper: empty interface (mimalloc disabled for TSan)")
+  add_library(klogg_mimalloc_wrapper INTERFACE)
 endif()
 
 set(CPM_USE_LOCAL_PACKAGES ${_TMP_CPM_USE_LOCAL_PACKAGES})
