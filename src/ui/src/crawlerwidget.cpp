@@ -76,6 +76,10 @@
 #include "quickfindpattern.h"
 #include "savedsearches.h"
 #include "shortcuts.h"
+#include "timerangedialog.h"
+#include "timerangefinder.h"
+#include <QMessageBox>
+#include <QSignalBlocker>
 
 static constexpr char AnsiColorSequenceRegex[] = "\\x1B\\[([0-9]{1,4}((;|:)[0-9]{1,3})*)?[mK]";
 
@@ -943,6 +947,63 @@ void CrawlerWidget::setSearchLimits( LineNumber startLine, LineNumber endLine )
     logMainView_->setSearchLimits( startLine, endLine );
     filteredView_->setSearchLimits( startLine, endLine );
 }
+
+void CrawlerWidget::applyTimeRangeFilter()
+{
+    TimeRangeDialog dialog( this );
+    if ( dialog.exec() != QDialog::Accepted ) {
+        return;
+    }
+
+    const auto range = TimeRangeFinder::find( *logData_, dialog.fromMs(), dialog.toMs() );
+    if ( !range.valid ) {
+        QMessageBox::information( this, tr( "Filter by time range" ), range.error );
+        return;
+    }
+
+    setSearchLimits( LineNumber( static_cast<LineNumber::UnderlyingType>( range.start ) ),
+                     LineNumber( static_cast<LineNumber::UnderlyingType>( range.end ) ) );
+
+    if ( !searchLineEdit_->currentText().isEmpty() ) {
+        // Hay texto de busqueda: se busca solo dentro del rango.
+        startNewSearch();
+        return;
+    }
+
+    // Sin texto de busqueda: se muestran todas las lineas del rango. Para eso se
+    // usa un patron que coincide con todo, ignorando temporalmente los botones
+    // de la busqueda (sin disparar sus senales) y restaurandolos al final.
+    const QSignalBlocker regexpBlocker( useRegexpButton_ );
+    const QSignalBlocker inverseBlocker( inverseButton_ );
+    const QSignalBlocker booleanBlocker( booleanButton_ );
+
+    const bool wasRegexp = useRegexpButton_->isChecked();
+    const bool wasInverse = inverseButton_->isChecked();
+    const bool wasBoolean = booleanButton_->isChecked();
+
+    useRegexpButton_->setChecked( true );
+    inverseButton_->setChecked( false );
+    booleanButton_->setChecked( false );
+
+    // ".*" coincide tambien con lineas vacias, pero no todos los motores de
+    // expresiones lo aceptan; si no es valido se usa "." como alternativa.
+    QString matchAll = QStringLiteral( ".*" );
+    const RegularExpressionPattern candidate( matchAll, matchCaseButton_->isChecked(), false, false,
+                                              false );
+    const RegularExpression candidateExpression{ candidate };
+    if ( !candidateExpression.isValid() ) {
+        matchAll = QStringLiteral( "." );
+    }
+
+    replaceCurrentSearch( matchAll );
+
+    useRegexpButton_->setChecked( wasRegexp );
+    inverseButton_->setChecked( wasInverse );
+    booleanButton_->setChecked( wasBoolean );
+
+    tabbedFilteredView_->setTabText( tabbedFilteredView_->currentIndex(), tr( "Time range" ) );
+}
+
 
 void CrawlerWidget::clearSearchLimits()
 {

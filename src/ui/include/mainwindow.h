@@ -135,6 +135,7 @@ class MainWindow : public QMainWindow {
     void removeFromFavorites();
     void selectOpenedFile();
     void generateDump();
+    void processWalletTransaction();
 
     // Change the view settings
     void toggleOverviewVisibility( bool isVisible );
@@ -271,6 +272,7 @@ class MainWindow : public QMainWindow {
     QAction* optionsAction;
     QAction* showScratchPadAction;
     QAction* showDocumentationAction;
+    QAction* mpQrTransactionAction;
     QAction* aboutAction;
     QAction* aboutQtAction;
     QAction* predefinedFiltersDialogAction;
@@ -305,15 +307,14 @@ class MainWindow : public QMainWindow {
     // QuickFind widget
     QuickFindWidget quickFindWidget_;
 
-    // Multiplex signals to/from the QuickFindWidget
-    QuickFindMux quickFindMux_;
-
-    // The main widget
     TabbedCrawlerWidget mainTabWidget_;
-
+ 
     TabbedScratchPad scratchPad_;
 
     QTemporaryDir tempDir_;
+
+    // Multiplex signals to/from the QuickFindWidget
+    QuickFindMux quickFindMux_;
 
     bool isMaximized_ = false;
     bool isCloseFromTray_ = false;
