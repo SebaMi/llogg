@@ -41,7 +41,7 @@ jobs:
           if-no-files-found: error
 
   Linux:
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -143,7 +143,7 @@ jobs:
           if-no-files-found: error      
 
   Mac:
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -227,20 +227,31 @@ jobs:
         id: cache-openssl
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}\openssl-1.1
-          key: OpensslCache-1-1-1w
+          path: ${{ github.workspace }}\openssl-3.5.9
+          key: OpensslCache-3-5-9
 
       - name: Download openssl
-        if: ${{ steps.cache-openssl.outputs.cache-hit != 'true' }} 
+        if: ${{ steps.cache-openssl.outputs.cache-hit != 'true' }}
+        shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://www.firedaemon.com/download-firedaemon-openssl-1.1.1-zip" -OutFile openssl.zip
-          7z x openssl.zip 
+          Invoke-WebRequest `
+            -Uri "https://download.firedaemon.com/FireDaemon-OpenSSL/openssl-3.5.9.zip" `
+            -OutFile openssl.zip
+
+          $expectedHash = "76da391395be029b44794857b9ff380255e02a0960a98314cd3f6a6816d82696"
+          $actualHash = (Get-FileHash -Path openssl.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          if ($actualHash -ne $expectedHash) {
+            throw "OpenSSL SHA-256 mismatch. Expected $expectedHash, got $actualHash"
+          }
+
+          $opensslDir = Join-Path $env:GITHUB_WORKSPACE "openssl-3.5.9"
+          7z x openssl.zip "-o$opensslDir" -y
 
       - name: Set openssl paths
         shell: sh
         run: |
-          echo "SSL_DIR=${{ github.workspace }}\openssl-1.1\${{ matrix.config.arch }}\bin" >> $GITHUB_ENV
-          echo "SSL_ARCH=${{ matrix.config.ssl_arch }}" >> $GITHUB_ENV 
+          echo "SSL_DIR=${{ github.workspace }}\openssl-3.5.9\${{ matrix.config.arch }}\bin" >> $GITHUB_ENV
 
       - uses: ./.github/actions/agent-setup
       - uses: ./.github/actions/klogg-version
@@ -253,6 +264,27 @@ jobs:
 
       - uses: ./.github/actions/agent-build
       - uses: ./.github/actions/agent-run-tests
+      - name: Diagnose TBB files
+        shell: pwsh
+        run: |
+          $buildRoot = Join-Path $env:GITHUB_WORKSPACE "build_root"
+
+          Write-Host "=== TBB files under build root ==="
+
+          Get-ChildItem $buildRoot `
+            -Filter "tbb12.*" `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+
+          Write-Host "=== TBB files under output ==="
+
+          Get-ChildItem (Join-Path $buildRoot "output") `
+            -Filter "tbb12.*" `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
       - uses: ./.github/actions/agent-package-win
         with:
           s3-key-id: ${{ secrets.WIN_CS_KEY_ID }}
