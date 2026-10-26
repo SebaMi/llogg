@@ -264,27 +264,24 @@ jobs:
 
       - uses: ./.github/actions/agent-build
       - uses: ./.github/actions/agent-run-tests
-      - name: Diagnose TBB files
+      - name: Diagnose TBB
         shell: pwsh
         run: |
-          $buildRoot = Join-Path $env:GITHUB_WORKSPACE "build_root"
+          Write-Host "== tbb files in workspace =="
+          Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Include "*tbb*" -ErrorAction SilentlyContinue |
+            Where-Object { -not $_.PSIsContainer } |
+            Select-Object FullName, Length | Format-Table -AutoSize -Wrap
 
-          Write-Host "=== TBB files under build root ==="
+          Write-Host "== does the exe import tbb12.dll? =="
+          foreach ($f in "klogg.exe","klogg_portable.exe") {
+            $p = Join-Path $env:GITHUB_WORKSPACE "build_root\output\$f"
+            $dep = Select-String -Path $p -Pattern "tbb12.dll" -SimpleMatch -Quiet
+            Write-Host "$f imports tbb12.dll: $dep"
+          }
 
-          Get-ChildItem $buildRoot `
-            -Filter "tbb12.*" `
-            -Recurse `
-            -File `
-            -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName
-
-          Write-Host "=== TBB files under output ==="
-
-          Get-ChildItem (Join-Path $buildRoot "output") `
-            -Filter "tbb12.*" `
-            -File `
-            -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName
+          Write-Host "== TBB in CMakeCache =="
+          Select-String -Path (Join-Path $env:GITHUB_WORKSPACE "build_root\CMakeCache.txt") -Pattern "TBB" |
+            ForEach-Object { $_.Line }
       - uses: ./.github/actions/agent-package-win
         with:
           s3-key-id: ${{ secrets.WIN_CS_KEY_ID }}
