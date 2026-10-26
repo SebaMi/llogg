@@ -45,6 +45,7 @@
 #include "log.h"
 #include <QNetworkReply>
 #include <cassert>
+#include <cstdio>
 #include <exception>
 
 #include <iterator>
@@ -56,17 +57,23 @@
 #include <windows.h>
 #endif // Q_OS_WIN
 
+#include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QListView>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QProgressDialog>
+#include <QProcess>
 #include <QResource>
 #include <QScreen>
 #include <QShortcut>
@@ -122,12 +129,15 @@ QTranslator MainWindow::mQtTranslator;
 
 MainWindow::MainWindow( WindowSession session )
     : session_( std::move( session ) )
+    , trayIcon_( nullptr )
     , mainIcon_()
     , iconLoader_( this )
     , signalMux_()
-    , quickFindMux_( session_.getQuickFindPattern() )
+    , quickFindWidget_()
     , mainTabWidget_()
+    , scratchPad_()
     , tempDir_( QDir::temp().filePath( "klogg_temp_" ) )
+    , quickFindMux_( session_.getQuickFindPattern() )
 {
     createActions();
     createMenus();
@@ -604,6 +614,11 @@ void MainWindow::createActions()
     aboutQtAction->setStatusTip( tr( action::aboutQtStatusTip ) );
     connect( aboutQtAction, &QAction::triggered, this, [ this ]( auto ) { this->aboutQt(); } );
 
+    mpQrTransactionAction = new QAction( tr( "Extract wallet transaction" ), this );
+    mpQrTransactionAction->setStatusTip( tr( "Extract a wallet transaction from the current log" ) );
+    connect( mpQrTransactionAction, &QAction::triggered, this,
+             [ this ]( auto ) { this->processWalletTransaction(); } );
+
     reportIssueAction = new QAction( tr( action::reportIssueText ), this );
     reportIssueAction->setStatusTip( tr( action::reportIssueStatusTip ) );
     connect( reportIssueAction, &QAction::triggered, this,
@@ -774,6 +789,16 @@ void MainWindow::createMenus()
     editMenu->addAction( findAction );
     editMenu->addSeparator();
     editMenu->addAction( goToLineAction );
+    {
+        auto* timeRangeAction = new QAction( tr( "Filter by &time range..." ), this );
+        timeRangeAction->setStatusTip( tr( "Show only the lines between two points in time" ) );
+        connect( timeRangeAction, &QAction::triggered, this, [ this ]( auto ) {
+            if ( auto crawler = currentCrawlerWidget() ) {
+                crawler->applyTimeRangeFilter();
+            }
+        } );
+        editMenu->addAction( timeRangeAction );
+    }
     editMenu->addSeparator();
     editMenu->addAction( copyPathToClipboardAction );
     editMenu->addAction( openContainingFolderAction );
@@ -811,6 +836,7 @@ void MainWindow::createMenus()
 
     toolsMenu->addSeparator();
     toolsMenu->addAction( showScratchPadAction );
+    toolsMenu->addAction( mpQrTransactionAction );
 
     menuBar()->addMenu( EncodingMenu::generate( encodingGroup ) );
     menuBar()->addSeparator();
@@ -2260,5 +2286,408 @@ void MainWindow::generateDump()
 
     if ( userAction == QMessageBox::Yes ) {
         throw std::logic_error( "test dump" );
+    }
+}
+
+namespace {
+
+struct WalletPlugin
+{
+    QString dir;
+    QString entry;
+    QString maskArg;
+    bool maskDefault{};
+};
+
+WalletPlugin findWalletPlugin()
+{
+    QStringList searchDirs;
+
+    if ( !qEnvironmentVariableIsEmpty( "KLOGG_PLUGINS_DIR" ) ) {
+        searchDirs << qEnvironmentVariable( "KLOGG_PLUGINS_DIR" );
+    }
+
+    const auto exeDir = QCoreApplication::applicationDirPath();
+    searchDirs << exeDir + "/plugins"
+               << exeDir + "/../src/plugins"
+               << QDir::currentPath() + "/plugins"
+               << QDir::currentPath() + "/src/plugins";
+
+    for ( const auto& dir : searchDirs ) {
+        const auto jsonPath = dir + "/plugin.json";
+        QFile jsonFile( jsonPath );
+        if ( !jsonFile.open( QIODevice::ReadOnly ) ) {
+            continue;
+        }
+        const auto json = QJsonDocument::fromJson( jsonFile.readAll() );
+        jsonFile.close();
+
+        if ( !json.isObject()
+             || json.object().value( "entry" ).toString().isEmpty() ) {
+            continue;
+        }
+
+        const QString pluginDir = QFileInfo( jsonPath ).absolutePath();
+        if ( !QFileInfo::exists( pluginDir + "/" + json.object().value( "entry" ).toString() ) ) {
+            continue;
+        }
+
+        WalletPlugin plugin;
+        plugin.dir = pluginDir;
+        plugin.entry = json.object().value( "entry" ).toString();
+
+        const auto options = json.object().value( "options" ).toArray();
+        for ( const auto& value : options ) {
+            const auto option = value.toObject();
+            if ( option.value( "id" ).toString() == "mask_secrets" ) {
+                plugin.maskArg = option.value( "arg" ).toString();
+                plugin.maskDefault = option.value( "default" ).toBool();
+            }
+        }
+
+        if ( plugin.maskArg.isEmpty() ) {
+            plugin.maskArg = "--mask-tokens";
+            plugin.maskDefault = false;
+        }
+
+        return plugin;
+    }
+
+    return {};
+}
+
+QString formatJsonSummary( const QByteArray& raw )
+{
+    const auto doc = QJsonDocument::fromJson( raw );
+    if ( !doc.isObject() ) {
+        return QString();
+    }
+
+    const auto json = doc.object();
+    QStringList lines;
+    for ( auto it = json.constBegin(); it != json.constEnd(); ++it ) {
+        const auto value = it.value();
+        if ( value.isArray() ) {
+            QStringList items;
+            for ( const auto& item : value.toArray() ) {
+                items << ( item.isObject()
+                   ? QString::fromUtf8( QJsonDocument( item.toObject() )
+                                             .toJson( QJsonDocument::Compact ) )
+                   : item.toString() );
+            }
+            lines << it.key() + ": " + items.join( ", " );
+        }
+        else if ( value.isObject() ) {
+            lines << it.key() + ": "
+                  << QString::fromUtf8( QJsonDocument( value.toObject() )
+                                             .toJson( QJsonDocument::Compact ) );
+        }
+        else {
+            lines << it.key() + ": " + value.toString();
+        }
+    }
+    return lines.join( "\n" );
+}
+
+} // namespace
+
+void MainWindow::processWalletTransaction()
+{
+    auto currentCrawler = currentCrawlerWidget();
+    if ( !currentCrawler ) {
+        QMessageBox::warning( this, tr( "klogg" ), tr( "No file is currently open" ) );
+        return;
+    }
+
+    const auto inputPath = QFileInfo( session_.getFilename( currentCrawler ) ).absoluteFilePath();
+    if ( inputPath.isEmpty() ) {
+        QMessageBox::warning( this, tr( "klogg" ), tr( "Unable to get current file path" ) );
+        return;
+    }
+
+    const auto plugin = findWalletPlugin();
+    if ( plugin.dir.isEmpty() ) {
+        QMessageBox::critical(
+            this, tr( "klogg" ),
+            tr( "Could not find a wallet transaction plugin.\n"
+                "Set KLOGG_PLUGINS_DIR or place plugin.json next to the executable." ) );
+        return;
+    }
+    const WalletPlugin pluginDefaults = plugin;
+
+    const QFileInfo inputInfo( inputPath );
+
+    QDialog dialog( this );
+    dialog.setWindowTitle( tr( "Extract wallet transaction" ) );
+    dialog.setMinimumWidth( 440 );
+
+    auto* layout = new QVBoxLayout( &dialog );
+
+    auto* sourceLabel = new QLabel( tr( "Source log:\n%1" ).arg( inputInfo.absoluteFilePath() ),
+                                    &dialog );
+    sourceLabel->setWordWrap( true );
+    sourceLabel->setTextInteractionFlags( Qt::TextSelectableByMouse );
+    layout->addWidget( sourceLabel );
+
+    layout->addWidget( new QLabel( tr( "Extraction engine:" ), &dialog ) );
+    auto* engineCombo = new QComboBox( &dialog );
+    engineCombo->addItem( tr( "Prisma/Payway QR (extract_prisma_qr.py)" ),
+                          QStringLiteral( "prisma" ) );
+    engineCombo->addItem( tr( "MP QR legacy (extract_mp.py)" ), QStringLiteral( "mp" ) );
+    layout->addWidget( engineCombo );
+
+    auto* trxEdit = new QLineEdit( &dialog );
+    trxEdit->setPlaceholderText(
+        tr( "walletPosTrxId, e.g. 00000SC194000000002420252209042237" ) );
+    layout->addWidget( trxEdit );
+
+    auto* firstCompletionCheck = new QCheckBox(
+        tr( "Ignore retransmissions of UnSyncCompletion (only the first)" ), &dialog );
+    layout->addWidget( firstCompletionCheck );
+
+    auto* maskCheck = new QCheckBox( &dialog );
+    layout->addWidget( maskCheck );
+
+    auto applyEngineDefaults = [ &dialog, engineCombo, maskCheck, &pluginDefaults ]() {
+        const auto engine = engineCombo->currentData().toString();
+        if ( engine == "mp" ) {
+            maskCheck->setText( tr( "Mask access tokens" ) );
+            maskCheck->setChecked( false );
+        }
+        else {
+            maskCheck->setText( tr( "Mask Payway/Prisma apikey" ) );
+            maskCheck->setChecked( pluginDefaults.maskDefault );
+        }
+    };
+    QObject::connect(
+        engineCombo,
+        static_cast< void ( QComboBox::* )( int ) >( &QComboBox::currentIndexChanged ),
+        &dialog, applyEngineDefaults );
+    applyEngineDefaults();
+
+    auto* buttonBox = new QDialogButtonBox( QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+                                            &dialog );
+    layout->addWidget( buttonBox );
+
+    QObject::connect( buttonBox, &QDialogButtonBox::accepted, &dialog, &QDialog::accept );
+    QObject::connect( buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject );
+
+    if ( dialog.exec() != QDialog::Accepted ) {
+        return;
+    }
+
+    const auto walletPosTrxId = trxEdit->text().trimmed();
+    if ( walletPosTrxId.isEmpty() ) {
+        QMessageBox::warning( this, tr( "klogg" ), tr( "Wallet transaction ID cannot be empty" ) );
+        return;
+    }
+
+    const auto outputPath
+        = inputInfo.absolutePath() + '/' + inputInfo.completeBaseName() + '.' + walletPosTrxId
+          + ".log";
+
+    const auto engine = engineCombo->currentData().toString();
+
+    QString pythonExe = QStringLiteral( "python3" );
+#ifdef Q_OS_WIN
+    pythonExe = QStringLiteral( "python" );
+#endif
+
+    QStringList args;
+    if ( engine == "mp" ) {
+        args << plugin.dir + "/extract_mp.py"
+             << "--log" << inputPath
+             << "--out" << outputPath
+             << "--wallet-pos-trx-id" << walletPosTrxId;
+        if ( firstCompletionCheck->isChecked() ) {
+            args << "--first-completion-only";
+        }
+        if ( maskCheck->isChecked() ) {
+            args << "--mask-tokens";
+        }
+    }
+    else {
+        args << plugin.dir + '/' + plugin.entry
+             << "--log" << inputPath
+             << "--out" << outputPath
+             << "--wallet-pos-trx-id" << walletPosTrxId;
+        if ( firstCompletionCheck->isChecked() ) {
+            args << "--first-completion-only";
+        }
+        if ( maskCheck->isChecked() ) {
+            args << ( plugin.maskArg.isEmpty() ? QStringLiteral( "--mask-secrets" )
+                                                : plugin.maskArg );
+        }
+    }
+
+    LOG_INFO << "wallet extract: " << pythonExe.toStdString()
+             << " " << args.join( " " ).toStdString();
+
+    auto* process = new QProcess( this );
+    auto* progressDialog = new QProgressDialog(
+        tr( "Extracting transaction..." ), tr( "Cancel" ), 0, 100, this );
+    progressDialog->setWindowModality( Qt::WindowModal );
+    progressDialog->setAutoClose( false );
+    progressDialog->setValue( 0 );
+    progressDialog->show();
+
+    auto* cancelled = new bool( false );
+    QObject::connect( progressDialog, &QProgressDialog::canceled, this,
+                      [ cancelled, process ]() {
+                          *cancelled = true;
+                          if ( process->state() != QProcess::NotRunning ) {
+                              process->kill();
+                          }
+                      } );
+    QObject::connect( process, &QProcess::errorOccurred, this,
+                      [ cancelled, process ]() {
+                          const auto err = process->error();
+                          fprintf( stderr, "[wallet-extract] errorOccurred: %d (%s)\n",
+                                  static_cast<int>( err ), process->errorString().toUtf8().constData() );
+                          if ( err == QProcess::FailedToStart ) {
+                              *cancelled = true;
+                              if ( process->state() != QProcess::NotRunning ) {
+                                  process->kill();
+                              }
+                          }
+                      } );
+    auto* errorBuffer = new QString();
+    QObject::connect( process, &QProcess::readyReadStandardError, this,
+                      [ process, progressDialog, errorBuffer ]() {
+                          *errorBuffer += QString::fromUtf8( process->readAllStandardError() );
+                          auto lines = errorBuffer->split( QLatin1Char( '\n' ) );
+                          const auto last = lines.takeLast();
+                          for ( auto& line : lines ) {
+                              line = line.trimmed();
+                              if ( line.isEmpty() ) {
+                                  continue;
+                              }
+                              if ( line.startsWith( QStringLiteral( "PROGRESS " ) ) ) {
+                                  bool ok{};
+                                  const auto value = line.mid( 9 ).toInt( &ok );
+                                  if ( ok ) {
+                                      progressDialog->setValue( qBound( 0, value, 100 ) );
+                                  }
+                              }
+                              else {
+                                  progressDialog->setLabelText( line );
+                                  LOG_INFO << "wallet extract stderr: "
+                                           << line.toStdString();
+                              }
+                          }
+                          *errorBuffer = last;
+                      } );
+
+    QObject::connect(
+        process,
+        static_cast< void ( QProcess::* )( int, QProcess::ExitStatus ) >( &QProcess::finished ),
+        this, [ this, process, progressDialog, errorBuffer, cancelled, outputPath ](
+            int exitCode, QProcess::ExitStatus exitStatus ) {
+            progressDialog->close();
+            delete progressDialog;
+
+            const auto standardError = process->readAllStandardError();
+            const auto standardOutput = process->readAllStandardOutput();
+            const auto processErrorString = process->errorString();
+            const auto processError = process->error();
+            const auto processState = process->state();
+            const bool wasCancelled = *cancelled;
+            fprintf( stderr,
+                     "[wallet-extract] finished code=%d status=%d cancelled=%d "
+                     "procErr=%d state=%d errStr='%s' stderrBytes=%lld stdoutBytes=%lld\n",
+                     exitCode, static_cast<int>( exitStatus ), wasCancelled ? 1 : 0,
+                     static_cast<int>( processError ), static_cast<int>( processState ),
+                     processErrorString.toUtf8().constData(),
+                     static_cast<long long>( standardError.size() ),
+                     static_cast<long long>( standardOutput.size() ) );
+            delete process;
+            delete errorBuffer;
+            delete cancelled;
+            LOG_INFO << "wallet extract: finished code="
+                     << exitCode << " status=" << static_cast< int >( exitStatus )
+                     << " cancelled=" << ( wasCancelled ? 1 : 0 )
+                     << " processError=" << static_cast< int >( processError )
+                     << " state=" << static_cast< int >( processState )
+                     << " errorString=" << processErrorString.toStdString()
+                     << " stderrBytes=" << standardError.size()
+                     << " stdoutBytes=" << standardOutput.size();
+
+            const auto errorText = QString::fromUtf8( standardError ).trimmed();
+
+            if ( exitStatus != QProcess::NormalExit ) {
+                QMessageBox::warning(
+                    this, tr( "klogg" ),
+                    tr( "The extraction process was terminated." )
+                        + ( errorText.isEmpty() ? QString()
+                                                : "\n\n" + tr( "Details:\n%1" ).arg( errorText ) ) );
+                return;
+            }
+
+            if ( exitCode == 0 ) {
+                QString details;
+                const auto summary = formatJsonSummary( standardOutput );
+                if ( !summary.isEmpty() ) {
+                    details = "\n\n" + summary;
+                }
+                else if ( !errorText.isEmpty() ) {
+                    details = "\n\n" + errorText;
+                }
+
+                QMessageBox box( QMessageBox::Question,
+                                tr( "klogg" ),
+                                tr( "Transaction extracted successfully.\n\nOutput: %1%2" )
+                                    .arg( QDir::toNativeSeparators( outputPath ) )
+                                    .arg( details ),
+                                QMessageBox::NoButton, this );
+                auto* openButton = box.addButton( tr( "Open" ), QMessageBox::AcceptRole );
+                box.addButton( tr( "Close" ), QMessageBox::RejectRole );
+                LOG_INFO << "wallet extract: showing success dialog for "
+                         << outputPath.toStdString();
+                const auto clicked = box.exec();
+                LOG_INFO << "wallet extract: success dialog result " << clicked
+                         << " button " << ( box.clickedButton() ? box.clickedButton()->text().toStdString()
+                                                                : std::string{} );
+                if ( box.clickedButton() == openButton ) {
+                    this->loadFile( outputPath );
+                }
+                return;
+            }
+
+            QString message;
+            switch ( exitCode ) {
+            case 2:
+                message = tr( "The transaction was not found in the log." );
+                break;
+            case 3:
+                message = tr( "Invalid arguments or log file." );
+                break;
+            case 5:
+                message = tr( "Unexpected error while extracting the transaction." );
+                break;
+            default:
+                message = tr( "Extraction failed with exit code %1." ).arg( exitCode );
+                break;
+            }
+
+            if ( !errorText.isEmpty() ) {
+                message += "\n\n" + tr( "Details:\n%1" ).arg( errorText );
+            }
+
+            QMessageBox::warning( this, tr( "klogg" ), message );
+        } );
+
+    process->start( pythonExe, args );
+    if ( process->state() == QProcess::NotRunning ) {
+        progressDialog->close();
+        delete progressDialog;
+        delete process;
+        delete errorBuffer;
+        delete cancelled;
+        QMessageBox::critical(
+            this, tr( "klogg" ),
+            tr( "Failed to start the Python interpreter (%1).\n%2" )
+                .arg( pythonExe )
+                .arg( tr( "Please make sure Python 3.8+ is installed and available on the PATH." ) ) );
+        return;
     }
 }

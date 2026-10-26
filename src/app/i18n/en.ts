@@ -492,6 +492,16 @@
         <translation>Open file</translation>
     </message>
     <message>
+        <location filename="../../ui/src/mainwindow.cpp" line="1230"/>
+        <source>MP QR Legacy</source>
+        <translation>MP QR Legacy</translation>
+    </message>
+    <message>
+        <location filename="../../ui/src/mainwindow.cpp" line="1231"/>
+        <source>Reconstruct MP QR legacy transactions</source>
+        <translation>Reconstruct MP QR legacy transactions</translation>
+    </message>
+    <message>
         <location filename="../../ui/src/mainwindow.cpp" line="924"/>
         <location filename="../../ui/src/mainwindow.cpp" line="1695"/>
         <source>All files (*)</source>

@@ -83,6 +83,9 @@ class CrawlerWidget : public QSplitter,
     Q_OBJECT
 
   public:
+    // Pide un rango horario y restringe la busqueda a ese tramo del log.
+    void applyTimeRangeFilter();
+
     CrawlerWidget( QWidget* parent = nullptr );
 
     // Get the line number of the first line displayed.
